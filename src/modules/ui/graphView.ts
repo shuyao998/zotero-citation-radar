@@ -2,24 +2,22 @@
  * Citation graph viewer.
  *
  * Reads the seed paper's local citation graph (references + cited-by) from
- * SQLite, renders an interactive vis-network HTML, writes it to the temp
- * directory, and opens it in the user's default browser.
+ * SQLite, renders an interactive vis-network HTML, writes it to a temp file,
+ * and returns the path. The caller (menu.ts) then hands the path to the
+ * unified Zotero chrome window which hosts the file in a tabbed iframe.
  *
  * Layout choices:
  *   - Seed paper: large gold node at center
  *   - References (this paper cites): blue, positioned upward
  *   - Cited-by (papers citing this): green, positioned downward
  *   - Node size scales with log(cited_by_count + 1) so visual mass = influence
- *   - Top-N filtering by cited_by_count keeps the graph readable for highly
- *     cited papers (NumPy → 14k cited-by would be unrenderable raw)
  */
 
 import { config } from "../../../package.json";
 import { getServices } from "../lifecycle";
+import { writeTempHtml } from "./zoteroWindow";
 
 declare const Zotero: any;
-declare const IOUtils: any;
-declare const PathUtils: any;
 
 // All locally-stored references and cited-by are shown in the graph.
 // Upstream cap (citedByMaxResults pref) controls how much enters the DB;
@@ -35,10 +33,21 @@ interface NodeRow {
   is_influential: number | null; // 1 if S2 flagged the connecting edge
 }
 
-export async function openCitationGraph(
+export interface PreparedGraph {
+  filePath: string;
+  seedTitle: string;
+  seedRow: NodeRow;
+}
+
+/**
+ * Build the citation-graph HTML for `zoteroItemId` and write it to a temp
+ * file. Returns the file path + seed metadata so the caller can title the
+ * window and combine with other tabs.
+ */
+export async function prepareGraphTempFile(
   zoteroItemId: number,
   fallbackTitle: string,
-): Promise<void> {
+): Promise<PreparedGraph> {
   const { db } = getServices();
   const conn = db.connection;
 
@@ -49,7 +58,7 @@ export async function openCitationGraph(
   );
   if (!seedRow) {
     throw new Error(
-      "本地数据库还没有这条目的引文记录，请先用「从 OpenAlex 抓取引文」",
+      "本地数据库还没有这条目的引文记录，请先抓取一次",
     );
   }
 
@@ -93,21 +102,16 @@ export async function openCitationGraph(
     visJs,
   });
 
-  void totalRefs; // intentionally unused now that shown = local
-
-  const tempDir = PathUtils.join(
-    Zotero.getTempDirectory().path,
-    "citation-radar",
-  );
-  await IOUtils.makeDirectory(tempDir, { ignoreExisting: true });
-
-  const outFile = PathUtils.join(
-    tempDir,
+  const filePath = await writeTempHtml(
     `graph-${seedRow.id}-${Date.now()}.html`,
+    html,
   );
-  await IOUtils.writeUTF8(outFile, html);
 
-  Zotero.launchFile(outFile);
+  return {
+    filePath,
+    seedTitle: seedRow.title || fallbackTitle,
+    seedRow,
+  };
 }
 
 async function loadBundledVisNetwork(): Promise<string> {
@@ -157,6 +161,17 @@ function renderHtml(input: RenderInput): string {
 
   const refsInfluentialCount = input.refs.filter((p) => p.is_influential).length;
   const citedInfluentialCount = input.citedBy.filter((p) => p.is_influential).length;
+
+  // Top-5 most-cited papers across refs + citedBy (excluding the seed itself).
+  // These get bold title / first-author / cited-by in the sidebar to draw the
+  // eye to the highest-impact neighbors.
+  const top5Ids = new Set<number>(
+    [...input.refs, ...input.citedBy]
+      .slice()
+      .sort((a, b) => (b.cited_by_count ?? 0) - (a.cited_by_count ?? 0))
+      .slice(0, 5)
+      .map((p) => p.id),
+  );
 
   // X positions are fixed per column (refs left / seed center / cited right);
   // Y is left for physics to settle organically — gives a natural look without
@@ -241,46 +256,61 @@ function renderHtml(input: RenderInput): string {
   // Vis-network paints labels onto <canvas>, which is non-selectable; this
   // sidebar is the user's escape hatch for copy-paste, search, and DOI clicks.
   type PaperType = "seed" | "ref" | "cited";
+  const seedSplit = splitAuthors(input.seed.authors_json);
   const paperList: Array<{
     id: number;
     title: string;
-    authors: string;
+    firstAuthor: string;
+    restAuthors: string;
     year: number | null;
     doi: string | null;
     citedBy: number | null;
     type: PaperType;
     influential: boolean;
+    topCited: boolean;
   }> = [
     {
       id: input.seed.id,
       title: input.seed.title,
-      authors: formatAuthors(input.seed.authors_json),
+      firstAuthor: seedSplit.first,
+      restAuthors: seedSplit.rest,
       year: input.seed.year,
       doi: input.seed.doi,
       citedBy: input.seed.cited_by_count,
       type: "seed" as PaperType,
       influential: false,
+      topCited: false,
     },
-    ...input.refs.map((p) => ({
-      id: p.id,
-      title: p.title,
-      authors: formatAuthors(p.authors_json),
-      year: p.year,
-      doi: p.doi,
-      citedBy: p.cited_by_count,
-      type: "ref" as PaperType,
-      influential: !!p.is_influential,
-    })),
-    ...input.citedBy.map((p) => ({
-      id: p.id,
-      title: p.title,
-      authors: formatAuthors(p.authors_json),
-      year: p.year,
-      doi: p.doi,
-      citedBy: p.cited_by_count,
-      type: "cited" as PaperType,
-      influential: !!p.is_influential,
-    })),
+    ...input.refs.map((p) => {
+      const split = splitAuthors(p.authors_json);
+      return {
+        id: p.id,
+        title: p.title,
+        firstAuthor: split.first,
+        restAuthors: split.rest,
+        year: p.year,
+        doi: p.doi,
+        citedBy: p.cited_by_count,
+        type: "ref" as PaperType,
+        influential: !!p.is_influential,
+        topCited: top5Ids.has(p.id),
+      };
+    }),
+    ...input.citedBy.map((p) => {
+      const split = splitAuthors(p.authors_json);
+      return {
+        id: p.id,
+        title: p.title,
+        firstAuthor: split.first,
+        restAuthors: split.rest,
+        year: p.year,
+        doi: p.doi,
+        citedBy: p.cited_by_count,
+        type: "cited" as PaperType,
+        influential: !!p.is_influential,
+        topCited: top5Ids.has(p.id),
+      };
+    }),
   ];
 
   const meta = {
@@ -375,16 +405,24 @@ function renderHtml(input: RenderInput): string {
       </div>
       <div class="row-list" id="row-list">
         ${paperList
-          .map(
-            (p) => `<div class="row${p.influential ? " influential" : ""}" data-paper-id="${p.id}" data-type="${p.type}">
-          <span class="dot" style="background: ${p.type === "seed" ? "#F4D03F" : p.type === "ref" ? "#5DADE2" : "#52BE80"}; margin-top: 5px; ${p.influential ? "border: 2px solid #C0392B; box-sizing: border-box;" : ""}"></span>
+          .map((p) => {
+            const titleEsc = escapeHtml(p.title || "(untitled)");
+            const titleHtml = p.topCited ? `<b>${titleEsc}</b>` : titleEsc;
+            const firstEsc = escapeHtml(p.firstAuthor);
+            const firstHtml = p.topCited ? `<b>${firstEsc}</b>` : firstEsc;
+            const citedTxt = `cited-by ${p.citedBy ?? "?"}`;
+            const citedHtml = p.topCited ? `<b>${citedTxt}</b>` : citedTxt;
+            const cls = `row${p.influential ? " influential" : ""}${p.topCited ? " top-cited" : ""}`;
+            const dotStyle = `background: ${p.type === "seed" ? "#F4D03F" : p.type === "ref" ? "#5DADE2" : "#52BE80"}; margin-top: 5px; ${p.influential ? "border: 2px solid #C0392B; box-sizing: border-box;" : ""}`;
+            return `<div class="${cls}" data-paper-id="${p.id}" data-type="${p.type}">
+          <span class="dot" style="${dotStyle}"></span>
           <div class="body">
-            <div class="title">${p.influential ? '<span class="inf-badge">关键</span> ' : ""}${escapeHtml(p.title || "(untitled)")}</div>
-            <div class="meta">${escapeHtml(p.authors)} · ${p.year ?? "?"} · cited-by ${p.citedBy ?? "?"}</div>
+            <div class="title">${p.influential ? '<span class="inf-badge">关键</span> ' : ""}${titleHtml}</div>
+            <div class="meta">${firstHtml}${escapeHtml(p.restAuthors)} · ${p.year ?? "?"} · ${citedHtml}</div>
             ${p.doi ? `<div class="meta doi">DOI: <a href="https://doi.org/${escapeHtml(p.doi)}" target="_blank" rel="noopener">${escapeHtml(p.doi)}</a></div>` : ""}
           </div>
-        </div>`,
-          )
+        </div>`;
+          })
           .join("")}
       </div>
     </aside>
@@ -539,6 +577,31 @@ function formatAuthors(authorsJson: string | null): string {
     return arr.slice(0, 3).map((a) => a.name ?? "?").join(", ") + ` 等 ${arr.length} 人`;
   } catch {
     return "(unknown authors)";
+  }
+}
+
+function splitAuthors(authorsJson: string | null): {
+  first: string;
+  rest: string;
+} {
+  if (!authorsJson) return { first: "(unknown authors)", rest: "" };
+  try {
+    const arr = JSON.parse(authorsJson) as Array<{ name?: string }>;
+    if (!arr.length) return { first: "(unknown authors)", rest: "" };
+    const first = arr[0].name ?? "?";
+    if (arr.length === 1) return { first, rest: "" };
+    if (arr.length <= 3) {
+      const rest =
+        ", " + arr.slice(1).map((a) => a.name ?? "?").join(", ");
+      return { first, rest };
+    }
+    const rest =
+      ", " +
+      arr.slice(1, 3).map((a) => a.name ?? "?").join(", ") +
+      ` 等 ${arr.length} 人`;
+    return { first, rest };
+  } catch {
+    return { first: "(unknown authors)", rest: "" };
   }
 }
 

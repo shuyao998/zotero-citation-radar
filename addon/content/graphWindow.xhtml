@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8"/>
+  <title>Citation Radar</title>
+  <style>
+    :root { color-scheme: light dark; }
+    html, body { margin: 0; padding: 0; height: 100vh; width: 100vw; overflow: hidden; background: #fafafa; }
+    body { display: flex; flex-direction: column; font-family: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1a1a1a; }
+      .tab-bar { background: #232323 !important; border-bottom-color: #3a3a3a !important; }
+      .tab-button { background: #2a2a2a !important; color: #e5e5e5 !important; border-color: #3a3a3a !important; }
+      .tab-button.active { background: #3d3d3d !important; }
+    }
+
+    .tab-bar {
+      flex: 0 0 auto;
+      display: flex; gap: 4px;
+      padding: 8px 12px 0 12px;
+      background: #f0f0f0;
+      border-bottom: 1px solid #ddd;
+    }
+    .tab-bar.hidden { display: none; }
+    .tab-button {
+      padding: 7px 18px;
+      border: 1px solid #ccc;
+      border-bottom: none;
+      border-radius: 6px 6px 0 0;
+      cursor: pointer;
+      background: #fafafa;
+      font-size: 13px;
+      font-family: inherit;
+      color: #333;
+      transition: background 0.15s;
+    }
+    .tab-button:hover { background: #fff; }
+    .tab-button.active {
+      background: #fff;
+      font-weight: 600;
+      color: #1B4F72;
+      box-shadow: 0 -2px 0 0 #5DADE2 inset;
+    }
+
+    .pane-container { flex: 1 1 auto; min-height: 0; position: relative; }
+    .pane {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      border: none; display: block;
+    }
+    .pane.hidden { display: none; }
+
+    #status {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 4px 12px;
+      background: rgba(0,0,0,0.85); color: #fff;
+      font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+      z-index: 9999;
+      max-height: 50vh; overflow: auto;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="tab-bar" class="tab-bar hidden"></div>
+  <div class="pane-container">
+    <iframe id="pane-0" class="pane"></iframe>
+    <iframe id="pane-1" class="pane hidden"></iframe>
+  </div>
+  <div id="status">init...</div>
+  <script><![CDATA[
+    var statusEl = document.getElementById('status');
+    var setStatus = function (m) {
+      try { statusEl.textContent = String(m).slice(0, 800); } catch (_) {}
+    };
+    var hideStatus = function () { statusEl.style.display = 'none'; };
+
+    statusEl.style.cursor = 'pointer';
+    statusEl.addEventListener('click', hideStatus);
+
+    (async function () {
+      try {
+        var raw = window.arguments && window.arguments[0];
+        var args = (raw && raw.wrappedJSObject) || raw;
+        if (!args || !args.tabs || args.tabs.length === 0) {
+          throw new Error('window.arguments[0].tabs is empty');
+        }
+        if (args.title) document.title = args.title;
+
+        var tabs = Array.from(args.tabs).slice(0, 2); // max 2 panes by design
+        setStatus('Loading ' + tabs.length + ' tab(s)...');
+
+        // Build tab buttons (only show bar when 2+ tabs)
+        var tabBar = document.getElementById('tab-bar');
+        if (tabs.length > 1) {
+          tabBar.classList.remove('hidden');
+          tabs.forEach(function (t, i) {
+            var btn = document.createElement('button');
+            btn.className = 'tab-button' + (i === 0 ? ' active' : '');
+            btn.textContent = t.label;
+            btn.dataset.index = String(i);
+            btn.addEventListener('click', function () {
+              activatePane(Number(btn.dataset.index));
+            });
+            tabBar.appendChild(btn);
+          });
+        }
+
+        // Fetch each pane's HTML and inline via srcdoc.
+        // (Eager fetch — both ready when user switches tabs.)
+        for (var i = 0; i < tabs.length; i++) {
+          var pane = document.getElementById('pane-' + i);
+          var url = tabs[i].url;
+          setStatus('Fetching tab ' + (i + 1) + '/' + tabs.length + ': ' + url);
+          var resp = await fetch(url);
+          if (!resp.ok) {
+            throw new Error('Fetch ' + resp.status + ' ' + resp.statusText + ' for ' + url);
+          }
+          var html = await resp.text();
+          pane.srcdoc = html;
+        }
+
+        setStatus('Mounted ' + tabs.length + ' tab(s).');
+        setTimeout(hideStatus, 1500);
+      } catch (e) {
+        setStatus('ERR: ' + ((e && (e.stack || e.message)) || String(e)));
+      }
+    })();
+
+    function activatePane(idx) {
+      var buttons = document.querySelectorAll('.tab-button');
+      buttons.forEach(function (b) {
+        b.classList.toggle('active', Number(b.dataset.index) === idx);
+      });
+      for (var i = 0; i < 2; i++) {
+        var p = document.getElementById('pane-' + i);
+        if (p) p.classList.toggle('hidden', i !== idx);
+      }
+    }
+  ]]></script>
+</body>
+</html>
