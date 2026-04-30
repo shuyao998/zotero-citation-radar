@@ -12,6 +12,7 @@
 
 import { config } from "../../../package.json";
 import { OpenAlexClient } from "../citationGraph/openAlexClient";
+import { SemanticScholarClient } from "../citationGraph/semanticScholarClient";
 import { getServices } from "../lifecycle";
 import { getPref } from "../../utils/prefs";
 import type { PaperRecord } from "../citationGraph/types";
@@ -178,14 +179,71 @@ async function onFetchFromOpenAlex(): Promise<void> {
     }
   }
 
+  // === Semantic Scholar enrichment: mark influential edges ===
+  const s2Key = (getPref("semanticScholarApiKey") as string) || undefined;
+  const s2Client = new SemanticScholarClient({ apiKey: s2Key });
+  let totalInfluentialMarked = 0;
+
+  for (const item of itemsWithDoi) {
+    const doi = item.getField("DOI");
+    progress.createLine({
+      text: `S2: 抓 influential 标记... ${truncate(doi, 50)}`,
+      type: "default",
+      progress: undefined,
+    });
+    try {
+      const [refInf, citInf] = await Promise.all([
+        s2Client.getReferenceInfluences(doi),
+        s2Client.getCitationInfluences(doi),
+      ]);
+      const refDois = Object.keys(refInf).filter((d) => refInf[d]);
+      const citDois = Object.keys(citInf).filter((d) => citInf[d]);
+
+      await db.connection.executeTransaction(async () => {
+        if (refDois.length > 0) {
+          const placeholders = refDois.map(() => "?").join(",");
+          await db.connection.queryAsync(
+            `UPDATE citation_edge SET is_influential = 1
+             WHERE source = 'openalex'
+               AND from_paper_id = (SELECT id FROM paper WHERE zotero_item_id = ?)
+               AND to_paper_id IN (
+                 SELECT id FROM paper WHERE LOWER(doi) IN (${placeholders})
+               )`,
+            [item.id, ...refDois],
+          );
+        }
+        if (citDois.length > 0) {
+          const placeholders = citDois.map(() => "?").join(",");
+          await db.connection.queryAsync(
+            `UPDATE citation_edge SET is_influential = 1
+             WHERE source = 'openalex'
+               AND to_paper_id = (SELECT id FROM paper WHERE zotero_item_id = ?)
+               AND from_paper_id IN (
+                 SELECT id FROM paper WHERE LOWER(doi) IN (${placeholders})
+               )`,
+            [item.id, ...citDois],
+          );
+        }
+      });
+      totalInfluentialMarked += refDois.length + citDois.length;
+    } catch (err) {
+      Zotero.debug(`[Citation Radar] S2 enrichment failed for ${doi}: ${err}`);
+      progress.createLine({
+        text: `⚠ S2 跳过 ${truncate(doi, 50)}: ${(err as Error).message.slice(0, 80)}`,
+        type: "fail",
+      });
+    }
+  }
+
   progress.changeLine({
     progress: 100,
     text:
       `✓ 完成 ${done}/${itemsWithDoi.length} 篇 · ` +
-      `references ${totalReferences} · cited-by ${totalCitedByFetched}/${totalCitedByReal}`,
+      `references ${totalReferences} · cited-by ${totalCitedByFetched}/${totalCitedByReal} · ` +
+      `influential ${totalInfluentialMarked}`,
     type: "success",
   });
-  progress.startCloseTimer(12000);
+  progress.startCloseTimer(15000);
 }
 
 async function upsertPaper(

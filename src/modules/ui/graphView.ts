@@ -32,6 +32,7 @@ interface NodeRow {
   authors_json: string | null;
   doi: string | null;
   cited_by_count: number | null;
+  is_influential: number | null; // 1 if S2 flagged the connecting edge
 }
 
 export async function openCitationGraph(
@@ -53,18 +54,20 @@ export async function openCitationGraph(
   }
 
   const refs: NodeRow[] = await conn.queryAsync(
-    `SELECT p.id, p.title, p.year, p.authors_json, p.doi, p.cited_by_count
+    `SELECT p.id, p.title, p.year, p.authors_json, p.doi, p.cited_by_count,
+            e.is_influential
      FROM citation_edge e JOIN paper p ON e.to_paper_id = p.id
      WHERE e.from_paper_id = ? AND e.source = 'openalex'
-     ORDER BY COALESCE(p.cited_by_count, 0) DESC`,
+     ORDER BY e.is_influential DESC, COALESCE(p.cited_by_count, 0) DESC`,
     [seedRow.id],
   );
 
   const citedBy: NodeRow[] = await conn.queryAsync(
-    `SELECT p.id, p.title, p.year, p.authors_json, p.doi, p.cited_by_count
+    `SELECT p.id, p.title, p.year, p.authors_json, p.doi, p.cited_by_count,
+            e.is_influential
      FROM citation_edge e JOIN paper p ON e.from_paper_id = p.id
      WHERE e.to_paper_id = ? AND e.source = 'openalex'
-     ORDER BY COALESCE(p.cited_by_count, 0) DESC`,
+     ORDER BY e.is_influential DESC, COALESCE(p.cited_by_count, 0) DESC`,
     [seedRow.id],
   );
 
@@ -135,23 +138,25 @@ function renderHtml(input: RenderInput): string {
   const seedAuthors = formatAuthors(input.seed.authors_json);
 
   // Seed gets a fixed prominent size; everyone else scales by log10(cited_by).
-  // Range chosen so a 10-citation paper is visibly small vs a 10k-citation
-  // landmark paper. Wider range than v0 (was 8..28).
   const SEED_SIZE = 42;
   const sizeFor = (cited: number | null): number => {
     const c = cited ?? 0;
     return Math.max(9, Math.min(40, 9 + Math.log10(c + 1) * 7.5));
   };
 
-  // Color scheme: clear left/right semantic split.
-  // Refs (left, ancestors): cool blue family (#3498DB).
-  // Seed (middle): warm gold (#F39C12).
-  // CitedBy (right, descendants): vivid green (#27AE60).
+  // Color scheme.
   const SEED_COLOR = { background: "#F4D03F", border: "#B7950B" };
   const REF_COLOR = { background: "#5DADE2", border: "#1F618D" };
   const CITED_COLOR = { background: "#52BE80", border: "#196F3D" };
   const REF_EDGE = "#3498DB";
   const CITED_EDGE = "#27AE60";
+
+  // S2-flagged influential edges/nodes: red border + thicker edge.
+  const INF_BORDER = "#C0392B";
+  const INF_EDGE = "#E74C3C";
+
+  const refsInfluentialCount = input.refs.filter((p) => p.is_influential).length;
+  const citedInfluentialCount = input.citedBy.filter((p) => p.is_influential).length;
 
   // X positions are fixed per column (refs left / seed center / cited right);
   // Y is left for physics to settle organically — gives a natural look without
@@ -179,8 +184,11 @@ function renderHtml(input: RenderInput): string {
       title: tooltipFor(p),
       shape: "dot",
       size: sizeFor(p.cited_by_count),
-      color: REF_COLOR,
-      font: { size: 11, face: "system-ui", color: "#1F618D", strokeWidth: 3, strokeColor: "#fff" },
+      color: p.is_influential
+        ? { background: REF_COLOR.background, border: INF_BORDER }
+        : REF_COLOR,
+      borderWidth: p.is_influential ? 4 : 2,
+      font: { size: 11, face: "system-ui", color: p.is_influential ? "#922B21" : "#1F618D", strokeWidth: 3, strokeColor: "#fff" },
       x: COL_X.ref,
       y: yJitter(i, input.refs.length, 700),
       fixed: { x: true, y: false },
@@ -191,8 +199,11 @@ function renderHtml(input: RenderInput): string {
       title: tooltipFor(p),
       shape: "dot",
       size: sizeFor(p.cited_by_count),
-      color: CITED_COLOR,
-      font: { size: 11, face: "system-ui", color: "#196F3D", strokeWidth: 3, strokeColor: "#fff" },
+      color: p.is_influential
+        ? { background: CITED_COLOR.background, border: INF_BORDER }
+        : CITED_COLOR,
+      borderWidth: p.is_influential ? 4 : 2,
+      font: { size: 11, face: "system-ui", color: p.is_influential ? "#922B21" : "#196F3D", strokeWidth: 3, strokeColor: "#fff" },
       x: COL_X.cited,
       y: yJitter(i, input.citedBy.length, 500),
       fixed: { x: true, y: false },
@@ -208,13 +219,21 @@ function renderHtml(input: RenderInput): string {
       from: p.id,
       to: input.seed.id,
       arrows: "to",
-      color: { color: REF_EDGE, opacity: 0.6 },
+      width: p.is_influential ? 2.5 : 1.2,
+      color: {
+        color: p.is_influential ? INF_EDGE : REF_EDGE,
+        opacity: p.is_influential ? 0.85 : 0.55,
+      },
     })),
     ...input.citedBy.map((p) => ({
       from: input.seed.id,
       to: p.id,
       arrows: "to",
-      color: { color: CITED_EDGE, opacity: 0.6 },
+      width: p.is_influential ? 2.5 : 1.2,
+      color: {
+        color: p.is_influential ? INF_EDGE : CITED_EDGE,
+        opacity: p.is_influential ? 0.85 : 0.55,
+      },
     })),
   ];
 
@@ -230,6 +249,7 @@ function renderHtml(input: RenderInput): string {
     doi: string | null;
     citedBy: number | null;
     type: PaperType;
+    influential: boolean;
   }> = [
     {
       id: input.seed.id,
@@ -239,6 +259,7 @@ function renderHtml(input: RenderInput): string {
       doi: input.seed.doi,
       citedBy: input.seed.cited_by_count,
       type: "seed" as PaperType,
+      influential: false,
     },
     ...input.refs.map((p) => ({
       id: p.id,
@@ -248,6 +269,7 @@ function renderHtml(input: RenderInput): string {
       doi: p.doi,
       citedBy: p.cited_by_count,
       type: "ref" as PaperType,
+      influential: !!p.is_influential,
     })),
     ...input.citedBy.map((p) => ({
       id: p.id,
@@ -257,6 +279,7 @@ function renderHtml(input: RenderInput): string {
       doi: p.doi,
       citedBy: p.cited_by_count,
       type: "cited" as PaperType,
+      influential: !!p.is_influential,
     })),
   ];
 
@@ -321,6 +344,8 @@ function renderHtml(input: RenderInput): string {
   .row .doi a { color: #2874A6; text-decoration: none; }
   .row .doi a:hover { text-decoration: underline; }
   .row.hidden { display: none; }
+  .row.influential { border-left: 3px solid #C0392B; }
+  .inf-badge { display: inline-block; background: #C0392B; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }
 </style>
 </head>
 <body>
@@ -328,13 +353,14 @@ function renderHtml(input: RenderInput): string {
     <h1>${escapeHtml(meta.seedTitle)}</h1>
     <div class="sub">${escapeHtml(meta.seedAuthors)} · ${meta.seedYear}${meta.seedDoi ? ` · DOI: ${escapeHtml(meta.seedDoi)}` : ""}</div>
     <div class="stats">
-      <span title="本文引用的文献数（图中已全部展示）">引用：<b>${meta.refsShown}</b></span>
-      <span title="本地已抓取的被引数 / OpenAlex 报告的真实被引数。两者不一致 = 受 citedByMaxResults 上限限制">被引：本地 <b>${meta.citedByLocal}</b> · 真实 ${meta.citedByReal}${meta.citedByLocal < meta.citedByReal ? `（缺 ${meta.citedByReal - meta.citedByLocal}）` : ""}</span>
+      <span title="本文引用的文献数（图中已全部展示）">引用：<b>${meta.refsShown}</b>${refsInfluentialCount ? ` · <span style="color:#C0392B">关键 ${refsInfluentialCount}</span>` : ""}</span>
+      <span title="本地已抓取的被引数 / OpenAlex 报告的真实被引数。两者不一致 = 受 citedByMaxResults 上限限制">被引：本地 <b>${meta.citedByLocal}</b> · 真实 ${meta.citedByReal}${meta.citedByLocal < meta.citedByReal ? `（缺 ${meta.citedByReal - meta.citedByLocal}）` : ""}${citedInfluentialCount ? ` · <span style="color:#C0392B">关键 ${citedInfluentialCount}</span>` : ""}</span>
     </div>
     <div class="legend">
       <span class="legend-chip"><span class="dot" style="background:#5DADE2"></span>← 它引用的（${meta.refsShown}，左侧）</span>
       <span class="legend-chip"><span class="dot" style="background:#F4D03F"></span>种子论文（中间）</span>
       <span class="legend-chip"><span class="dot" style="background:#52BE80"></span>引用它的（${meta.citedByLocal}，右侧）→</span>
+      <span class="legend-chip"><span class="dot" style="background:#fff;border:3px solid #C0392B"></span>S2 关键引用（红边 + 红线）</span>
       <span class="legend-chip">节点大小 ∝ log(cited_by_count) · 箭头方向 = 影响力流向（旧→新）</span>
     </div>
   </div>
@@ -350,10 +376,10 @@ function renderHtml(input: RenderInput): string {
       <div class="row-list" id="row-list">
         ${paperList
           .map(
-            (p) => `<div class="row" data-paper-id="${p.id}" data-type="${p.type}">
-          <span class="dot" style="background: ${p.type === "seed" ? "#F4D03F" : p.type === "ref" ? "#5DADE2" : "#52BE80"}; margin-top: 5px;"></span>
+            (p) => `<div class="row${p.influential ? " influential" : ""}" data-paper-id="${p.id}" data-type="${p.type}">
+          <span class="dot" style="background: ${p.type === "seed" ? "#F4D03F" : p.type === "ref" ? "#5DADE2" : "#52BE80"}; margin-top: 5px; ${p.influential ? "border: 2px solid #C0392B; box-sizing: border-box;" : ""}"></span>
           <div class="body">
-            <div class="title">${escapeHtml(p.title || "(untitled)")}</div>
+            <div class="title">${p.influential ? '<span class="inf-badge">关键</span> ' : ""}${escapeHtml(p.title || "(untitled)")}</div>
             <div class="meta">${escapeHtml(p.authors)} · ${p.year ?? "?"} · cited-by ${p.citedBy ?? "?"}</div>
             ${p.doi ? `<div class="meta doi">DOI: <a href="https://doi.org/${escapeHtml(p.doi)}" target="_blank" rel="noopener">${escapeHtml(p.doi)}</a></div>` : ""}
           </div>
