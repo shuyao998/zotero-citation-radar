@@ -1,7 +1,7 @@
 {
   "name": "zotero-citation-radar",
   "type": "module",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "Zotero plugin that turns each paper into a radar reading: citation-graph 'influence' assessment plus LLM-powered citation-faithfulness verification.",
   "config": {
     "addonName": "Zotero Citation Radar",

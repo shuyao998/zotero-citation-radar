@@ -1,95 +1,114 @@
 # Zotero Citation Radar
 
-> 给每篇文献一次"雷达扫描"——基于引文图谱给出**江湖地位**评估，并用 LLM 核查**引文是否真的支持其论点**。
+给每篇文献一次雷达扫描——基于本地引文图谱给出文献定位，用 LLM 输出结构化分析报告。
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-![Status: pre-alpha](https://img.shields.io/badge/Status-pre--alpha-orange.svg)
+[![Release](https://img.shields.io/badge/Release-R1-brightgreen.svg)](https://github.com/shuyao998/zotero-citation-radar/releases)
 ![Zotero: 7-8](https://img.shields.io/badge/Zotero-7%20%7C%208-red.svg)
 
-## 这个插件是干嘛的？
+## 这个插件解决什么问题
 
-把一篇文献加入 Zotero 后，你通常不知道：
-- 它在领域里是开创性工作、主流跟随、还是边缘探索？
-- 它引用的那些论文，**真的**支持作者声称的论点吗？
+Zotero 自带的元数据只告诉你被引几次，但不告诉你这篇文章在领域里属于哪一脉、它接的是谁的工作、它对后续产生了什么影响。Citation Radar 把 OpenAlex 的引文图谱 + Semantic Scholar 的影响力标记 + LLM 的结构化分析串起来，一次右键就能看完。
 
-现有的 Zotero 插件要么只给被引数，要么只能做单篇问答。**Citation Radar 把引文图谱 + 全文 + LLM 三者打通**，给你两个核心能力：
+## 已实现功能（R1）
 
-### 模块 A：江湖地位评估
-- 自动从 OpenAlex / Semantic Scholar 拉本文的全部引用 + 被引论文
-- 标记 *influential citations*（Semantic Scholar 机器学习判定的"真正基于此论文推进的"引用）
-- 把图结构 + 关键论文摘要喂给 LLM，输出一份结构化报告：开创性 / 主流 / 跟随 / 边缘 / 综述
+引文图谱视图
 
-### 模块 B：引文真实性核查
-- 在 PDF 阅读器里选中一段含引用的论点 → 右键 "Verify citation"
-- 插件自动定位被引论文 PDF 的对应段落
-- LLM 比对原始证据，给出判断：`supports` / `partial` / `contradicts` / `unrelated`，并附推理与可点回的证据段
+- 从 OpenAlex 拉本文的所有 references 和 cited-by，存进本地 SQLite
+- Semantic Scholar 的 isInfluential 标记（哪些引用是结构性的、不是顺手的）会标在图上：红边框节点 + 红色加粗连线
+- 力导向布局：references 在左、种子论文居中、cited-by 在右，自由拖拽
+- 右侧 sidebar 列出所有节点，按关键 / 高被引排序，引用前 5 加粗，支持搜索 + 点击聚焦 + DOI 直跳
 
-## 安装方式
+文献定位报告（LLM 分析）
 
-> ⚠️ **当前为 pre-alpha 阶段，尚未发布 release。**
+- 把种子论文 + 关键先驱 15 篇 + 关键后继 10 篇的元数据和摘要喂给 LLM
+- 输出五选一的定位标签：seminal 开创 / mainstream 主流 / follow-up 跟随 / fringe 边缘 / review 综述
+- 中文 markdown 报告 + 置信度 + 关键先驱列表 + 关键后继列表 + caveats
+- 报告写进 SQLite 缓存，重复点击秒回；右键还有"重新分析"绕过缓存
 
-### 开发者本地构建
+统一界面
 
-需要：Node.js ≥ 22、Zotero 7 或 8、git
+- 一次右键 "分析此论文"，弹出一个 Zotero 内嵌窗口，顶部两个 tab：引文图谱 + 文献定位
+- 不需要离开 Zotero 跳到浏览器
+- LLM 失败不影响图谱 tab
+
+## 安装
+
+R1 release 已发布，普通用户两步安装：
+
+1. 到 [Releases 页面](https://github.com/shuyao998/zotero-citation-radar/releases) 下载最新的 `zotero-citation-radar.xpi`
+2. Zotero 打开 工具 → 插件 → 右上角齿轮 → Install Plugin From File，选刚下载的 xpi
+
+## 配置
+
+第一次启动后，编辑 → 设置 → Citation Radar 标签里填：
+
+| 字段 | 必填 | 用途 |
+|---|---|---|
+| OpenAlex API Key | 必填 | 拉引用图。免费，[这里申请](https://openalex.org/settings/api)，30 秒 |
+| Semantic Scholar API Key | 可选 | 拉影响力标记。不填走公共池（慢但能用）；想要稳定 1 req/s 就[这里申请](https://www.semanticscholar.org/product/api) |
+| LLM Provider | 必填 | 默认 DeepSeek |
+| LLM Model | 必填 | 默认 `deepseek-chat`，可改成 `deepseek-reasoner` 等 |
+| LLM API Key | 必填 | 你的 DeepSeek key（[申请入口](https://platform.deepseek.com/)） |
+| Cited-by 抓取上限 | 可选 | 默认 0 = 不限。被引非常多的文章可设上限省 API 配额 |
+
+所有 key 存在本地 Zotero 偏好里（`extensions.zotero.citation-radar.*`），不上传任何服务器。
+
+## 使用
+
+1. 在 Zotero 库里选中一篇有 DOI 的文献
+2. 右键 → Citation Radar：分析此论文
+3. 进度条会显示：抓引用 → 生成图谱 → 调 LLM 生成报告（首次约 20-40 秒）
+4. 弹出窗口，左 tab 看引文图谱，右 tab 看文献定位
+
+如果想让 LLM 重新跑一份新报告（比如对原报告不满意）：右键 → Citation Radar：重新分析此论文（绕过缓存）
+
+## 路线图
+
+- [x] R1：OpenAlex + S2 + 本地存储 + 引文图谱 + 文献定位 LLM 报告
+- [ ] R2：PDF 段落定位 + 引文真实性核查（选中带引用的句子，验证被引文献是否真的支持该论点）
+- [ ] R3：跨论文交叉引用视图 + 作者 h-index + 方法学指纹（材料学专属）
+
+## 项目结构
+
+```
+src/modules/
+├── citationGraph/   OpenAlex + Semantic Scholar 客户端
+├── influence/       文献定位评估（prompt + LLM + 解析）
+├── llm/             多 provider 抽象，目前实装 DeepSeek
+├── storage/         SQLite 持久化
+└── ui/              菜单 + 图谱视图 + 报告视图 + Zotero 窗口包装
+```
+
+## 开发者本地运行
+
+需要 Node.js 22+ 和 git。
 
 ```bash
 git clone https://github.com/shuyao998/zotero-citation-radar.git
 cd zotero-citation-radar
 npm install
 cp .env.example .env
-# 编辑 .env，填入 Zotero 路径与 API key
+# 编辑 .env，填入 Zotero 路径
 npm start
 ```
 
-### 普通用户安装（待发布后）
+`npm start` 会自动编译 + 启动一个独立 Zotero dev profile + 装入插件 + 监听文件变化热重载。
 
-下载 release 中的 `.xpi` 文件 → Zotero → Tools → Plugins → 齿轮按钮 → Install Plugin From File。
+## 隐私
 
-## 配置
-
-第一次启动后，在 Zotero → 编辑 → 首选项 → Citation Radar 标签内填入：
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| OpenAlex API Key | ✅ | 免费，[在这里申请](https://openalex.org/settings/api) |
-| Semantic Scholar API Key | ⚠️ | 推荐，[这里申请](https://www.semanticscholar.org/product/api)；不填则用公共池（慢） |
-| LLM Provider | ✅ | DeepSeek / OpenAI / Anthropic / Gemini / 自托管 |
-| LLM API Key | ✅ | 对应 provider 的 key |
-
-## 项目结构
-
-```
-src/modules/
-├── citationGraph/   # 拉引文图（OpenAlex + S2 + Crossref）
-├── influence/       # 江湖地位评估（A 模块）
-├── faithfulness/    # 引文真实性核查（B 模块）
-├── llm/             # 多 provider 抽象
-├── storage/         # SQLite 持久化
-└── pdf/             # PDF 文本提取与段落定位（W4 加入）
-```
-
-## 路线图
-
-- [x] 项目初始化（脚手架 + 模块骨架）
-- [ ] **W1** OpenAlex client + 本地 SQLite + 偏好面板
-- [ ] **W2** Semantic Scholar 整合 + 引文图构建
-- [ ] **W3** 模块 A 完整链路：prompt → LLM → 报告渲染
-- [ ] **W4** PDF 段落定位
-- [ ] **W5** 模块 B verifier + UI
-- [ ] **W6** 文档 / 国际化 / 发布 v0.1.0
-
-## 隐私与合规
-
-- 所有 API key **保存在本地 Zotero 偏好**（`extensions.zotero.citation-radar.*`），不会上传任何服务器
-- LLM 调用使用**用户自己的 API key**，数据隐私由 provider 条款决定
-- 插件不收集任何遥测、不发送任何分析数据
+- 所有 API key 保存在本地 Zotero 偏好，不上传任何服务器
+- LLM 调用使用你自己的 API key，数据隐私由 provider 条款决定
+- 插件不收集遥测、不发送分析数据
+- 引文数据通过 OpenAlex 和 Semantic Scholar 的公开 API 拉取，缓存在本地 SQLite
 
 ## 致谢
 
-- [windingwind/zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) — 项目骨架
-- [OpenAlex](https://openalex.org) — 全球开放学术图谱
-- [Semantic Scholar](https://www.semanticscholar.org/) — Influential citations 算法
+- [windingwind/zotero-plugin-template](https://github.com/windingwind/zotero-plugin-template) 项目脚手架
+- [OpenAlex](https://openalex.org) 全球开放学术图谱
+- [Semantic Scholar](https://www.semanticscholar.org/) Influential citations 算法
+- [vis-network](https://visjs.org/) 图谱可视化
 
 ## 许可证
 
-[AGPL-3.0-or-later](LICENSE) © 2026 shuyao998
+[AGPL-3.0-or-later](LICENSE)
