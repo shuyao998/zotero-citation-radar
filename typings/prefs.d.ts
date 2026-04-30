@@ -12,6 +12,7 @@ declare namespace _ZoteroTypes {
       "llmProvider": string;
       "llmModel": string;
       "llmApiKey": string;
+      "citedByMaxResults": number;
     };
   }
 }

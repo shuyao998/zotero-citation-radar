@@ -4,6 +4,8 @@
 // @ts-nocheck
 export type FluentMessageId =
   | 'menuitem-fetch-openalex'
+  | 'pref-citedby-max'
+  | 'pref-citedby-max-help'
   | 'pref-help'
   | 'pref-llm-key'
   | 'pref-llm-model'

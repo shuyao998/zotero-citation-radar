@@ -70,33 +70,53 @@ export class OpenAlexClient {
 
   /**
    * Fetch citing works (papers that cite the given OpenAlex Work).
-   * Uses the `filter=cites:W...` endpoint. Pages until exhausted or capped.
+   * Uses the `filter=cites:W...` endpoint, paginated via cursor.
+   *
+   * @param options.maxResults  Hard cap on returned papers. Undefined or 0 means
+   *                            "all of them" — for the NumPy paper this is 14k+
+   *                            and ~280 API calls; budget your quota accordingly.
+   * @param options.onProgress  Called after each page with the cumulative count
+   *                            and total (from the `meta.count` field on the
+   *                            first response). Use to drive a progress UI.
    */
   async getCitedBy(
     openAlexId: string,
-    options: { maxResults?: number } = {},
+    options: {
+      maxResults?: number;
+      onProgress?: (fetched: number, total: number) => void;
+    } = {},
   ): Promise<PaperRecord[]> {
     const id = stripOpenAlexUrl(openAlexId);
-    const max = options.maxResults ?? 200;
+    const cap =
+      options.maxResults && options.maxResults > 0
+        ? options.maxResults
+        : Infinity;
     const perPage = 50;
     const results: PaperRecord[] = [];
     let cursor = "*";
+    let total = 0;
 
-    while (results.length < max) {
+    while (results.length < cap) {
       const url =
         `${BASE_URL}/works?filter=cites:${id}&per-page=${perPage}` +
         `&cursor=${encodeURIComponent(cursor)}` +
         `&api_key=${encodeURIComponent(this.options.apiKey)}`;
       const page = await this.fetchJson<{
         results: RawWork[];
-        meta?: { next_cursor?: string | null };
+        meta?: { count?: number; next_cursor?: string | null };
       }>(url);
+
+      if (page.meta?.count != null && total === 0) total = page.meta.count;
+
       for (const work of page.results ?? []) {
         results.push(mapWorkToPaper(work));
-        if (results.length >= max) break;
+        if (results.length >= cap) break;
       }
+
+      options.onProgress?.(results.length, total);
+
       const next = page.meta?.next_cursor;
-      if (!next) break;
+      if (!next || (page.results ?? []).length === 0) break;
       cursor = next;
     }
 

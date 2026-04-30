@@ -15,6 +15,7 @@ import { OpenAlexClient } from "../citationGraph/openAlexClient";
 import { getServices } from "../lifecycle";
 import { getPref } from "../../utils/prefs";
 import type { PaperRecord } from "../citationGraph/types";
+import { openCitationGraph } from "./graphView";
 
 declare const Zotero: any;
 
@@ -32,6 +33,34 @@ export function registerMenuItems(): void {
     },
     icon: menuIcon,
   });
+
+  ztoolkit.Menu.register("item", {
+    tag: "menuitem",
+    id: `${config.addonRef}-view-graph`,
+    label: "Citation Radar：查看引文图谱",
+    commandListener: () => {
+      void onViewGraph();
+    },
+    icon: menuIcon,
+  });
+}
+
+async function onViewGraph(): Promise<void> {
+  const items = ztoolkit.getGlobal("ZoteroPane").getSelectedItems();
+  const target = items.find(
+    (it) => it.isRegularItem() && !!it.getField("DOI"),
+  );
+  if (!target) {
+    showProgress("请先选中一篇有 DOI 的条目（且已抓过引文）", "fail");
+    return;
+  }
+
+  try {
+    await openCitationGraph(target.id, target.getField("title") || "Paper");
+  } catch (err) {
+    Zotero.debug(`[Citation Radar] Graph generation failed: ${err}`);
+    showProgress(`生成图谱失败：${(err as Error).message}`, "fail");
+  }
 }
 
 async function onFetchFromOpenAlex(): Promise<void> {
@@ -68,8 +97,11 @@ async function onFetchFromOpenAlex(): Promise<void> {
   const client = new OpenAlexClient({ apiKey });
   const { db } = getServices();
 
+  const citedByCap = (getPref("citedByMaxResults") as number) ?? 0;
   let done = 0;
   let totalReferences = 0;
+  let totalCitedByFetched = 0;
+  let totalCitedByReal = 0;
 
   for (const item of itemsWithDoi) {
     const doi = item.getField("DOI");
@@ -83,6 +115,28 @@ async function onFetchFromOpenAlex(): Promise<void> {
         ? await client.getReferences(paper.openAlexId)
         : [];
 
+      const citedByTotal = paper.citedByCount ?? 0;
+      progress.changeLine({
+        progress: Math.round((done / itemsWithDoi.length) * 100),
+        text:
+          `[${done + 1}/${itemsWithDoi.length}] ${truncate(paper.title, 36)} ` +
+          `· 抓 cited-by 0/${citedByTotal}...`,
+      });
+
+      const citedBy = paper.openAlexId
+        ? await client.getCitedBy(paper.openAlexId, {
+            maxResults: citedByCap,
+            onProgress: (fetched, total) => {
+              progress.changeLine({
+                progress: Math.round((done / itemsWithDoi.length) * 100),
+                text:
+                  `[${done + 1}/${itemsWithDoi.length}] ${truncate(paper.title, 36)} ` +
+                  `· cited-by ${fetched}/${total}`,
+              });
+            },
+          })
+        : [];
+
       await db.connection.executeTransaction(async () => {
         for (const ref of refs) {
           const refId = await upsertPaper(db.connection, ref);
@@ -92,13 +146,28 @@ async function onFetchFromOpenAlex(): Promise<void> {
             [paperId, refId],
           );
         }
+        for (const citing of citedBy) {
+          const citingId = await upsertPaper(db.connection, citing);
+          await db.connection.queryAsync(
+            `INSERT OR IGNORE INTO citation_edge
+             (from_paper_id, to_paper_id, source) VALUES (?, ?, 'openalex')`,
+            [citingId, paperId],
+          );
+        }
       });
 
       totalReferences += refs.length;
+      totalCitedByFetched += citedBy.length;
+      totalCitedByReal += citedByTotal;
       done += 1;
+
+      const partial =
+        citedByCap > 0 && citedByTotal > citedByCap ? "（已上限）" : "";
       progress.changeLine({
         progress: Math.round((done / itemsWithDoi.length) * 100),
-        text: `[${done}/${itemsWithDoi.length}] ${truncate(paper.title, 50)} (${refs.length} 引用)`,
+        text:
+          `[${done}/${itemsWithDoi.length}] ${truncate(paper.title, 36)} ` +
+          `· refs ${refs.length} · cited-by ${citedBy.length}/${citedByTotal}${partial}`,
       });
     } catch (err) {
       Zotero.debug(`[Citation Radar] Fetch failed for DOI ${doi}: ${err}`);
@@ -111,10 +180,12 @@ async function onFetchFromOpenAlex(): Promise<void> {
 
   progress.changeLine({
     progress: 100,
-    text: `✓ 抓取完成 ${done}/${itemsWithDoi.length} 篇，共 ${totalReferences} 条引用`,
+    text:
+      `✓ 完成 ${done}/${itemsWithDoi.length} 篇 · ` +
+      `references ${totalReferences} · cited-by ${totalCitedByFetched}/${totalCitedByReal}`,
     type: "success",
   });
-  progress.startCloseTimer(8000);
+  progress.startCloseTimer(12000);
 }
 
 async function upsertPaper(
