@@ -7,8 +7,11 @@
 declare namespace _ZoteroTypes {
   interface Prefs {
     PluginPrefsMap: {
-      "enable": boolean;
-      "input": string;
+      "openAlexApiKey": string;
+      "semanticScholarApiKey": string;
+      "llmProvider": string;
+      "llmModel": string;
+      "llmApiKey": string;
     };
   }
 }

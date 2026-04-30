@@ -1,33 +1,106 @@
 <linkset>
   <html:link rel="localization" href="__addonRef__-preferences.ftl" />
 </linkset>
-<groupbox
-  onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })"
->
-  <label><html:h2 data-l10n-id="pref-title"></html:h2></label>
-  <checkbox
-    id="zotero-prefpane-__addonRef__-enable"
-    preference="enable"
-    data-l10n-id="pref-enable"
-  />
-  <hbox>
-    <html:label
-      for="zotero-prefpane-__addonRef__-input"
-      data-l10n-id="pref-input"
-    ></html:label>
-    <html:input
-      type="text"
-      id="zotero-prefpane-__addonRef__-input"
-      preference="input"
-    ></html:input>
-  </hbox>
-  <hbox class="virtualized-table-container" flex="1" height="300px">
-    <html:div id="__addonRef__-table-container" />
-  </hbox>
+
+<groupbox onload="Zotero.__addonInstance__.hooks.onPrefsEvent('load', { window })">
+  <label><html:h2 data-l10n-id="pref-section-api-title"></html:h2></label>
+
+  <vbox>
+    <hbox align="center">
+      <html:label
+        for="zotero-prefpane-__addonRef__-openAlexApiKey"
+        data-l10n-id="pref-openalex-key"
+        flex="1"
+      ></html:label>
+      <html:input
+        type="password"
+        id="zotero-prefpane-__addonRef__-openAlexApiKey"
+        preference="openAlexApiKey"
+        style="min-width: 300px"
+      ></html:input>
+    </hbox>
+    <html:label data-l10n-id="pref-openalex-key-help" class="dim"></html:label>
+  </vbox>
+
+  <vbox>
+    <hbox align="center">
+      <html:label
+        for="zotero-prefpane-__addonRef__-semanticScholarApiKey"
+        data-l10n-id="pref-s2-key"
+        flex="1"
+      ></html:label>
+      <html:input
+        type="password"
+        id="zotero-prefpane-__addonRef__-semanticScholarApiKey"
+        preference="semanticScholarApiKey"
+        style="min-width: 300px"
+      ></html:input>
+    </hbox>
+    <html:label data-l10n-id="pref-s2-key-help" class="dim"></html:label>
+  </vbox>
 </groupbox>
+
+<groupbox>
+  <label><html:h2 data-l10n-id="pref-section-llm-title"></html:h2></label>
+
+  <vbox>
+    <hbox align="center">
+      <html:label
+        for="zotero-prefpane-__addonRef__-llmProvider"
+        data-l10n-id="pref-llm-provider"
+        flex="1"
+      ></html:label>
+      <menulist
+        id="zotero-prefpane-__addonRef__-llmProvider"
+        preference="llmProvider"
+      >
+        <menupopup>
+          <menuitem label="DeepSeek" value="deepseek" />
+          <menuitem label="OpenAI" value="openai" />
+          <menuitem label="Anthropic" value="anthropic" />
+          <menuitem label="Gemini" value="gemini" />
+        </menupopup>
+      </menulist>
+    </hbox>
+  </vbox>
+
+  <vbox>
+    <hbox align="center">
+      <html:label
+        for="zotero-prefpane-__addonRef__-llmModel"
+        data-l10n-id="pref-llm-model"
+        flex="1"
+      ></html:label>
+      <html:input
+        type="text"
+        id="zotero-prefpane-__addonRef__-llmModel"
+        preference="llmModel"
+        style="min-width: 200px"
+      ></html:input>
+    </hbox>
+  </vbox>
+
+  <vbox>
+    <hbox align="center">
+      <html:label
+        for="zotero-prefpane-__addonRef__-llmApiKey"
+        data-l10n-id="pref-llm-key"
+        flex="1"
+      ></html:label>
+      <html:input
+        type="password"
+        id="zotero-prefpane-__addonRef__-llmApiKey"
+        preference="llmApiKey"
+        style="min-width: 300px"
+      ></html:input>
+    </hbox>
+  </vbox>
+</groupbox>
+
 <vbox>
   <html:label
     data-l10n-id="pref-help"
-    data-l10n-args='{"time": "__buildTime__","name": "__addonName__","version":"__buildVersion__"}'
+    data-l10n-args='{"name": "__addonName__","version":"__buildVersion__","time": "__buildTime__"}'
+    class="dim"
   ></html:label>
 </vbox>
